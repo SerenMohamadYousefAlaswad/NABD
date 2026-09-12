@@ -19,6 +19,8 @@ const INITIAL_AMBULANCES = [
     lng: 46.62,
     status: "Available",
     zone: "Zone 1",
+    speed: 60,
+    traffic: 1.1,
   },
   {
     id: "B",
@@ -26,6 +28,8 @@ const INITIAL_AMBULANCES = [
     lng: 46.72,
     status: "Available",
     zone: "Zone 2",
+    speed: 55,
+    traffic: 1.25,
   },
   {
     id: "C",
@@ -33,6 +37,8 @@ const INITIAL_AMBULANCES = [
     lng: 46.62,
     status: "Available",
     zone: "Zone 3",
+    speed: 65,
+    traffic: 1.15,
   },
   {
     id: "D",
@@ -40,6 +46,8 @@ const INITIAL_AMBULANCES = [
     lng: 46.72,
     status: "Available",
     zone: "Zone 4",
+    speed: 58,
+    traffic: 1.05,
   },
 ];
 
@@ -138,27 +146,100 @@ function App() {
   const [activeTab, setActiveTab] =
     useState("overview");
 
+  /*
+   * ==========================================
+   * 50-CASE IMPACT SIMULATION RESULTS
+   * ==========================================
+   */
+
+  const [impactSimulation, setImpactSimulation] =
+    useState(null);
+
+  /*
+   * ==========================================
+   * DISTANCE CALCULATION
+   * ==========================================
+   *
+   * Haversine formula calculates geographic
+   * distance between two coordinates.
+   *
+   * Result = kilometers.
+   */
+
   const calculateDistance = (
     lat1,
     lng1,
     lat2,
     lng2
   ) => {
-    const latDifference = lat1 - lat2;
-    const lngDifference = lng1 - lng2;
+    const earthRadius = 6371;
 
-    return Math.sqrt(
-      latDifference ** 2 +
-        lngDifference ** 2
-    );
+    const toRadians = (degrees) =>
+      (degrees * Math.PI) / 180;
+
+    const dLat = toRadians(lat2 - lat1);
+    const dLng = toRadians(lng2 - lng1);
+
+    const lat1Radians = toRadians(lat1);
+    const lat2Radians = toRadians(lat2);
+
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1Radians) *
+        Math.cos(lat2Radians) *
+        Math.sin(dLng / 2) ** 2;
+
+    const c =
+      2 *
+      Math.atan2(
+        Math.sqrt(a),
+        Math.sqrt(1 - a)
+      );
+
+    const straightLineDistance =
+      earthRadius * c;
+
+    /*
+     * Approximate road distance.
+     */
+    const roadDistance =
+      straightLineDistance * 1.3;
+
+    return roadDistance;
   };
 
-  const calculateETA = (distance) => {
+  /*
+   * ==========================================
+   * ETA CALCULATION
+   * ==========================================
+   */
+
+  const calculateETA = (
+    distance,
+    speed,
+    trafficFactor
+  ) => {
+    const baseTimeHours =
+      distance / speed;
+
+    const baseTimeMinutes =
+      baseTimeHours * 60;
+
+    const trafficAdjustedETA =
+      baseTimeMinutes *
+      trafficFactor;
+
     return Math.max(
-      3,
-      Math.round(distance * 1000)
+      2,
+      Math.round(trafficAdjustedETA)
     );
   };
+
+  /*
+   * ==========================================
+   * COVERAGE
+   * ==========================================
+   */
 
   const calculateCoverage = (
     eta,
@@ -176,6 +257,12 @@ function App() {
     );
   };
 
+  /*
+   * ==========================================
+   * RISK
+   * ==========================================
+   */
+
   const getRisk = (coverage) => {
     if (coverage >= 85) {
       return "LOW";
@@ -187,6 +274,12 @@ function App() {
 
     return "HIGH";
   };
+
+  /*
+   * ==========================================
+   * DISPATCH SIMULATION
+   * ==========================================
+   */
 
   const simulateDispatch = () => {
     if (!selectedEmergency) {
@@ -211,7 +304,11 @@ function App() {
             );
 
           const eta =
-            calculateETA(distance);
+            calculateETA(
+              distance,
+              ambulance.speed,
+              ambulance.traffic
+            );
 
           const coverage =
             calculateCoverage(
@@ -221,6 +318,13 @@ function App() {
 
           const risk =
             getRisk(coverage);
+
+          /*
+           * NABD score.
+           *
+           * Lower ETA is strongly preferred,
+           * while coverage is also considered.
+           */
 
           const score =
             100 -
@@ -255,6 +359,12 @@ function App() {
 
     setRecommendation(selectedUnit);
 
+    /*
+     * Simulated route line.
+     *
+     * This is not a real road route.
+     */
+
     setRoute([
       [
         selectedUnit.lat,
@@ -265,6 +375,12 @@ function App() {
         selectedEmergency.lng,
       ],
     ]);
+
+    /*
+     * ==========================================
+     * FUTURE COVERAGE ANALYSIS
+     * ==========================================
+     */
 
     const beforeCoverage = 92;
 
@@ -282,6 +398,10 @@ function App() {
     const futureRisk =
       getRisk(afterCoverage);
 
+    /*
+     * Vulnerable zone.
+     */
+
     const vulnerableZone =
       selectedUnit.zone === "Zone 1"
         ? "Zone 3"
@@ -291,10 +411,15 @@ function App() {
         ? "Zone 1"
         : "Zone 2";
 
+    /*
+     * Repositioning recommendation.
+     */
+
     const repositionUnit =
       simulatedResults.find(
         (unit) =>
-          unit.id !== selectedUnit.id
+          unit.id !==
+          selectedUnit.id
       );
 
     setFutureAnalysis({
@@ -315,6 +440,288 @@ function App() {
 
     setSimulationRunning(false);
   };
+
+  /*
+   * ==========================================
+   * 50-CASE IMPACT SIMULATION
+   * ==========================================
+   *
+   * BEFORE NABD:
+   * Nearest ambulance based on distance.
+   *
+   * AFTER NABD:
+   * Best ambulance based on NABD score.
+   *
+   * This creates 50 simulated emergency
+   * scenarios and compares both approaches.
+   */
+
+  const runImpactSimulation = () => {
+    setSimulationRunning(true);
+
+    const cases = [];
+
+    const availableAmbulances =
+      ambulances.filter(
+        (ambulance) =>
+          ambulance.status !== "Busy"
+      );
+
+    /*
+     * Make sure there are ambulances
+     * available for the simulation.
+     */
+
+    if (
+      availableAmbulances.length === 0
+    ) {
+      setSimulationRunning(false);
+      return;
+    }
+
+    /*
+     * Generate 50 emergency scenarios.
+     */
+
+    for (let i = 0; i < 50; i++) {
+      /*
+       * Random emergency location inside
+       * the demonstration area.
+       */
+
+      const emergency = {
+        lat:
+          24.655 +
+          Math.random() *
+            (24.775 - 24.655),
+
+        lng:
+          46.585 +
+          Math.random() *
+            (46.755 - 46.585),
+      };
+
+      /*
+       * Analyze every ambulance.
+       */
+
+      const analyzedUnits =
+        availableAmbulances.map(
+          (ambulance) => {
+            const distance =
+              calculateDistance(
+                ambulance.lat,
+                ambulance.lng,
+                emergency.lat,
+                emergency.lng
+              );
+
+            const eta =
+              calculateETA(
+                distance,
+                ambulance.speed,
+                ambulance.traffic
+              );
+
+            const coverage =
+              calculateCoverage(
+                eta,
+                ambulance.zone
+              );
+
+            const risk =
+              getRisk(coverage);
+
+            const score =
+              100 -
+              eta * 4 +
+              coverage;
+
+            return {
+              ...ambulance,
+              distance,
+              eta,
+              coverage,
+              risk,
+              score,
+            };
+          }
+        );
+
+      /*
+       * ========================================
+       * BEFORE NABD
+       * ========================================
+       *
+       * Traditional baseline:
+       * choose the geographically closest
+       * ambulance.
+       */
+
+      const beforeUnit =
+        [...analyzedUnits].sort(
+          (a, b) =>
+            a.distance - b.distance
+        )[0];
+
+      /*
+       * ========================================
+       * AFTER NABD
+       * ========================================
+       *
+       * NABD:
+       * choose the highest scoring unit.
+       */
+
+      const afterUnit =
+        [...analyzedUnits].sort(
+          (a, b) =>
+            b.score - a.score
+        )[0];
+
+      /*
+       * Time saved.
+       */
+
+      const improvement =
+        beforeUnit.eta -
+        afterUnit.eta;
+
+      const improvementPercent =
+        beforeUnit.eta > 0
+          ? (improvement /
+              beforeUnit.eta) *
+            100
+          : 0;
+
+      cases.push({
+        caseNumber: i + 1,
+
+        beforeUnit:
+          beforeUnit.id,
+
+        afterUnit:
+          afterUnit.id,
+
+        beforeETA:
+          beforeUnit.eta,
+
+        afterETA:
+          afterUnit.eta,
+
+        improvement,
+
+        improvementPercent,
+
+        beforeDistance:
+          beforeUnit.distance,
+
+        afterDistance:
+          afterUnit.distance,
+
+        beforeCoverage:
+          beforeUnit.coverage,
+
+        afterCoverage:
+          afterUnit.coverage,
+      });
+    }
+
+    /*
+     * ========================================
+     * CALCULATE FINAL STATISTICS
+     * ========================================
+     */
+
+    const totalCases =
+      cases.length;
+
+    const averageBefore =
+      cases.reduce(
+        (sum, item) =>
+          sum + item.beforeETA,
+        0
+      ) / totalCases;
+
+    const averageAfter =
+      cases.reduce(
+        (sum, item) =>
+          sum + item.afterETA,
+        0
+      ) / totalCases;
+
+    const averageImprovement =
+      averageBefore -
+      averageAfter;
+
+    const improvementPercent =
+      averageBefore > 0
+        ? (averageImprovement /
+            averageBefore) *
+          100
+        : 0;
+
+    const improvedCases =
+      cases.filter(
+        (item) =>
+          item.afterETA <
+          item.beforeETA
+      ).length;
+
+    const sameCases =
+      cases.filter(
+        (item) =>
+          item.afterETA ===
+          item.beforeETA
+      ).length;
+
+    const slowerCases =
+      cases.filter(
+        (item) =>
+          item.afterETA >
+          item.beforeETA
+      ).length;
+
+    const averageBeforeCoverage =
+      cases.reduce(
+        (sum, item) =>
+          sum + item.beforeCoverage,
+        0
+      ) / totalCases;
+
+    const averageAfterCoverage =
+      cases.reduce(
+        (sum, item) =>
+          sum + item.afterCoverage,
+        0
+      ) / totalCases;
+
+    /*
+     * Save simulation results.
+     */
+
+    setImpactSimulation({
+      cases,
+      totalCases,
+      averageBefore,
+      averageAfter,
+      averageImprovement,
+      improvementPercent,
+      improvedCases,
+      sameCases,
+      slowerCases,
+      averageBeforeCoverage,
+      averageAfterCoverage,
+    });
+
+    setSimulationRunning(false);
+  };
+
+  /*
+   * ==========================================
+   * ADD EMERGENCY
+   * ==========================================
+   */
 
   const addEmergency = () => {
     const newEmergency = {
@@ -341,6 +748,12 @@ function App() {
     setRoute([]);
   };
 
+  /*
+   * ==========================================
+   * RESET
+   * ==========================================
+   */
+
   const resetSimulation = () => {
     setAmbulances(
       INITIAL_AMBULANCES
@@ -358,8 +771,15 @@ function App() {
     setRecommendation(null);
     setFutureAnalysis(null);
     setRoute([]);
+    setImpactSimulation(null);
     setSimulationRunning(false);
   };
+
+  /*
+   * ==========================================
+   * DASHBOARD METRICS
+   * ==========================================
+   */
 
   const metrics = useMemo(() => {
     const available =
@@ -408,6 +828,8 @@ function App() {
   return (
     <div className="app">
 
+      {/* ================= HEADER ================= */}
+
       <header className="header">
 
         <div className="brand">
@@ -417,12 +839,16 @@ function App() {
           </div>
 
           <div>
-            <h1>NABD</h1>
+
+            <h1>
+              NABD
+            </h1>
 
             <p>
               Intelligent Ambulance
               Positioning System
             </p>
+
           </div>
 
         </div>
@@ -436,6 +862,8 @@ function App() {
         </div>
 
       </header>
+
+      {/* ================= NAVIGATION ================= */}
 
       <nav className="nav">
 
@@ -479,6 +907,8 @@ function App() {
         </button>
 
       </nav>
+
+      {/* ================= METRICS ================= */}
 
       <section className="metrics">
 
@@ -548,6 +978,8 @@ function App() {
 
       </section>
 
+      {/* ================= CONTROL ================= */}
+
       <section className="control-card">
 
         <div>
@@ -597,6 +1029,20 @@ function App() {
           </button>
 
           <button
+            className="primary-button"
+            onClick={
+              runImpactSimulation
+            }
+            disabled={
+              simulationRunning
+            }
+          >
+            {simulationRunning
+              ? "RUNNING 50 CASES..."
+              : "RUN 50 SIMULATIONS"}
+          </button>
+
+          <button
             className="reset-button"
             onClick={
               resetSimulation
@@ -609,7 +1055,11 @@ function App() {
 
       </section>
 
+      {/* ================= MAIN ================= */}
+
       <main className="main-grid">
+
+        {/* ================= MAP ================= */}
 
         <section className="map-card">
 
@@ -674,6 +1124,8 @@ function App() {
                 )
               )}
 
+            {/* Ambulances */}
+
             {ambulances.map(
               (ambulance) => (
                 <Marker
@@ -708,11 +1160,30 @@ function App() {
                     {" "}
                     {ambulance.zone}
 
+                    <br />
+
+                    Speed:
+                    {" "}
+                    {ambulance.speed}
+                    {" km/h"}
+
+                    <br />
+
+                    Traffic:
+                    {" "}
+                    {ambulance.traffic <= 1.1
+                      ? "Low"
+                      : ambulance.traffic <= 1.25
+                      ? "Moderate"
+                      : "High"}
+
                   </Popup>
 
                 </Marker>
               )
             )}
+
+            {/* Emergencies */}
 
             {emergencies.map(
               (emergency) => (
@@ -753,6 +1224,8 @@ function App() {
                 </Marker>
               )
             )}
+
+            {/* Recommended Route */}
 
             {route.length > 0 && (
               <Polyline
@@ -798,6 +1271,8 @@ function App() {
 
         </section>
 
+        {/* ================= ANALYSIS ================= */}
+
         <section className="analysis-column">
 
           {recommendation ? (
@@ -833,6 +1308,20 @@ function App() {
 
                   <strong>
                     {recommendation.eta} min
+                  </strong>
+
+                </div>
+
+                <div>
+
+                  <span>
+                    Distance:
+                  </span>
+
+                  <strong>
+                    {recommendation.distance.toFixed(
+                      1
+                    )} km
                   </strong>
 
                 </div>
@@ -888,6 +1377,8 @@ function App() {
 
           )}
 
+          {/* ================= UNIT ANALYSIS ================= */}
+
           <div className="analysis-card">
 
             <div className="card-header">
@@ -919,6 +1410,10 @@ function App() {
 
                       <th>
                         Unit
+                      </th>
+
+                      <th>
+                        Distance
                       </th>
 
                       <th>
@@ -959,7 +1454,15 @@ function App() {
                           </td>
 
                           <td>
-                            {unit.eta} min
+                            {unit.distance.toFixed(
+                              1
+                            )}
+                            {" km"}
+                          </td>
+
+                          <td>
+                            {unit.eta}
+                            {" min"}
                           </td>
 
                           <td>
@@ -1001,6 +1504,515 @@ function App() {
         </section>
 
       </main>
+
+      {/* ================= 50-CASE IMPACT ================= */}
+
+      {impactSimulation && (
+
+        <section className="future-section">
+
+          <div className="future-title">
+
+            <div>
+
+              <div className="section-label">
+                PERFORMANCE VALIDATION
+              </div>
+
+              <h2>
+                50-Case Impact Simulation
+              </h2>
+
+              <p>
+                Comparison between
+                traditional nearest-unit
+                dispatch and NABD
+                decision-making.
+              </p>
+
+            </div>
+
+          </div>
+
+          <div className="future-grid">
+
+            <div className="coverage-card">
+
+              <span>
+                BEFORE NABD
+              </span>
+
+              <strong>
+                {impactSimulation.averageBefore.toFixed(
+                  1
+                )}
+                {" min"}
+              </strong>
+
+              <small>
+                Average response time
+              </small>
+
+            </div>
+
+            <div className="future-arrow">
+              →
+            </div>
+
+            <div className="coverage-card after">
+
+              <span>
+                AFTER NABD
+              </span>
+
+              <strong>
+                {impactSimulation.averageAfter.toFixed(
+                  1
+                )}
+                {" min"}
+              </strong>
+
+              <small>
+                Average response time
+              </small>
+
+            </div>
+
+            <div className="coverage-card warning">
+
+              <span>
+                IMPROVEMENT
+              </span>
+
+              <strong>
+                {Math.max(
+                  0,
+                  impactSimulation.improvementPercent
+                ).toFixed(1)}
+                %
+              </strong>
+
+              <small>
+                Average response improvement
+              </small>
+
+            </div>
+
+          </div>
+
+          <div className="future-bottom">
+
+            <div className="risk-card">
+
+              <div className="risk-icon">
+                ✓
+              </div>
+
+              <div>
+
+                <span>
+                  CASES IMPROVED
+                </span>
+
+                <h3>
+                  {impactSimulation.improvedCases}
+                  {" / "}
+                  {impactSimulation.totalCases}
+                </h3>
+
+                <p>
+                  Emergency scenarios where
+                  NABD achieved a faster ETA.
+                </p>
+
+              </div>
+
+            </div>
+
+            <div className="reposition-card">
+
+              <div className="reposition-icon">
+                %
+              </div>
+
+              <div>
+
+                <span>
+                  AVERAGE TIME SAVED
+                </span>
+
+                <h3>
+                  {Math.max(
+                    0,
+                    impactSimulation.averageImprovement
+                  ).toFixed(1)}
+                  {" min"}
+                </h3>
+
+                <p>
+                  Average response time
+                  difference per emergency.
+                </p>
+
+              </div>
+
+            </div>
+
+          </div>
+
+          <div className="decision-banner">
+
+            <div className="decision-check">
+              ✓
+            </div>
+
+            <div>
+
+              <strong>
+                Simulation Result:
+              </strong>
+
+              {" "}
+
+              NABD changed the average
+              response time from{" "}
+
+              <strong>
+                {impactSimulation.averageBefore.toFixed(
+                  1
+                )}
+                {" min"}
+              </strong>
+
+              {" "}to{" "}
+
+              <strong>
+                {impactSimulation.averageAfter.toFixed(
+                  1
+                )}
+                {" min"}
+              </strong>
+
+              {" "}
+              across{" "}
+
+              <strong>
+                {impactSimulation.totalCases}
+              </strong>
+
+              {" "}
+              simulated emergency
+              scenarios.
+
+            </div>
+
+          </div>
+
+          {/* ================= SIMULATION SUMMARY ================= */}
+
+          <div className="analysis-card">
+
+            <div className="card-header">
+
+              <div>
+
+                <h2>
+                  Simulation Summary
+                </h2>
+
+                <p>
+                  Overall performance across
+                  50 emergency scenarios
+                </p>
+
+              </div>
+
+            </div>
+
+            <div className="table-wrapper">
+
+              <table>
+
+                <thead>
+
+                  <tr>
+
+                    <th>
+                      Metric
+                    </th>
+
+                    <th>
+                      Result
+                    </th>
+
+                  </tr>
+
+                </thead>
+
+                <tbody>
+
+                  <tr>
+
+                    <td>
+                      Total scenarios
+                    </td>
+
+                    <td>
+                      {impactSimulation.totalCases}
+                    </td>
+
+                  </tr>
+
+                  <tr>
+
+                    <td>
+                      Average ETA Before
+                    </td>
+
+                    <td>
+                      {impactSimulation.averageBefore.toFixed(
+                        1
+                      )}
+                      {" min"}
+                    </td>
+
+                  </tr>
+
+                  <tr>
+
+                    <td>
+                      Average ETA After
+                    </td>
+
+                    <td>
+                      {impactSimulation.averageAfter.toFixed(
+                        1
+                      )}
+                      {" min"}
+                    </td>
+
+                  </tr>
+
+                  <tr>
+
+                    <td>
+                      Average Difference
+                    </td>
+
+                    <td>
+                      {impactSimulation.averageImprovement.toFixed(
+                        1
+                      )}
+                      {" min"}
+                    </td>
+
+                  </tr>
+
+                  <tr>
+
+                    <td>
+                      Cases Improved
+                    </td>
+
+                    <td>
+                      {impactSimulation.improvedCases}
+                    </td>
+
+                  </tr>
+
+                  <tr>
+
+                    <td>
+                      Same ETA
+                    </td>
+
+                    <td>
+                      {impactSimulation.sameCases}
+                    </td>
+
+                  </tr>
+
+                  <tr>
+
+                    <td>
+                      Slower Cases
+                    </td>
+
+                    <td>
+                      {impactSimulation.slowerCases}
+                    </td>
+
+                  </tr>
+
+                  <tr>
+
+                    <td>
+                      Average Coverage Before
+                    </td>
+
+                    <td>
+                      {impactSimulation.averageBeforeCoverage.toFixed(
+                        1
+                      )}
+                      %
+                    </td>
+
+                  </tr>
+
+                  <tr>
+
+                    <td>
+                      Average Coverage After
+                    </td>
+
+                    <td>
+                      {impactSimulation.averageAfterCoverage.toFixed(
+                        1
+                      )}
+                      %
+                    </td>
+
+                  </tr>
+
+                </tbody>
+
+              </table>
+
+            </div>
+
+          </div>
+
+          {/* ================= CASE TABLE ================= */}
+
+          <div className="analysis-card">
+
+            <div className="card-header">
+
+              <div>
+
+                <h2>
+                  50 Simulation Cases
+                </h2>
+
+                <p>
+                  Before vs. NABD decision
+                </p>
+
+              </div>
+
+            </div>
+
+            <div className="table-wrapper">
+
+              <table>
+
+                <thead>
+
+                  <tr>
+
+                    <th>
+                      Case
+                    </th>
+
+                    <th>
+                      Before
+                    </th>
+
+                    <th>
+                      NABD
+                    </th>
+
+                    <th>
+                      Difference
+                    </th>
+
+                    <th>
+                      Before Unit
+                    </th>
+
+                    <th>
+                      NABD Unit
+                    </th>
+
+                  </tr>
+
+                </thead>
+
+                <tbody>
+
+                  {impactSimulation.cases.map(
+                    (item) => (
+                      <tr
+                        key={
+                          item.caseNumber
+                        }
+                      >
+
+                        <td>
+                          #{item.caseNumber}
+                        </td>
+
+                        <td>
+                          {item.beforeETA}
+                          {" min"}
+                        </td>
+
+                        <td>
+                          {item.afterETA}
+                          {" min"}
+                        </td>
+
+                        <td>
+
+                          <span
+                            className={
+                              item.improvement > 0
+                                ? "risk low"
+                                : item.improvement < 0
+                                ? "risk high"
+                                : "risk medium"
+                            }
+                          >
+
+                            {item.improvement > 0
+                              ? `-${item.improvement} min`
+                              : item.improvement < 0
+                              ? `+${Math.abs(
+                                  item.improvement
+                                )} min`
+                              : "0 min"}
+
+                          </span>
+
+                        </td>
+
+                        <td>
+                          Unit{" "}
+                          {item.beforeUnit}
+                        </td>
+
+                        <td>
+                          Unit{" "}
+                          {item.afterUnit}
+                        </td>
+
+                      </tr>
+                    )
+                  )}
+
+                </tbody>
+
+              </table>
+
+            </div>
+
+          </div>
+
+        </section>
+
+      )}
+
+      {/* ================= FUTURE IMPACT ================= */}
 
       {futureAnalysis && (
 
@@ -1170,6 +2182,7 @@ function App() {
               </strong>
 
               {" "}
+
               {
                 futureAnalysis.recommendation
               }
@@ -1181,6 +2194,8 @@ function App() {
         </section>
 
       )}
+
+      {/* ================= HOW NABD WORKS ================= */}
 
       <section className="how-section">
 
@@ -1224,7 +2239,9 @@ function App() {
 
             <p>
               NABD compares available
-              ambulance units.
+              ambulance units using
+              distance, speed and
+              traffic conditions.
             </p>
 
           </div>
@@ -1267,6 +2284,8 @@ function App() {
         </div>
 
       </section>
+
+      {/* ================= FOOTER ================= */}
 
       <footer className="footer">
 
